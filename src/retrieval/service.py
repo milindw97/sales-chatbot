@@ -2,8 +2,16 @@
 Retrieval service for querying call transcripts using RAG
 """
 
+from src.llm.prompts import (
+    QA_SYSTEM_PROMPT,
+    QA_USER_PROMPT_TEMPLATE,
+    SUMMARIZATION_SYSTEM_PROMPT,
+    SUMMARIZATION_USER_PROMPT_TEMPLATE,
+    QUERY_REWRITE_SYSTEM_PROMPT,
+    QUERY_REWRITE_USER_TEMPLATE,
+)
 from typing import List, Dict
-from src.storage.database import DatabaseManager
+from src.storage.database import DatabaseManager, CallChunk, CallTranscript
 from src.storage.embeddings import EmbeddingProvider
 from src.storage.vector_store import FAISSVectorStore
 from src.llm.providers import LLMProvider
@@ -82,7 +90,6 @@ class RetrievalService:
         try:
             for distance, faiss_idx in zip(distances, indices):
                 # Query within the session
-                from src.storage.database import CallChunk
 
                 chunk = (
                     session.query(CallChunk)
@@ -112,25 +119,66 @@ class RetrievalService:
 
         return results
 
-    def query(self, question: str, top_k: int = None) -> Dict:
+    def _rewrite_query(self, question: str, history: List[Dict]) -> str:
+        """
+        Rewrite a follow-up question to be a standalone query based on conversation history.
+
+        Args:
+            question: The follow-up question
+            history: List of previous conversation turns
+
+        Returns:
+            Rewritten standalone query
+        """
+        if not history:
+            return question
+
+        # Format the history for the prompt
+        history_text = ""
+        for turn in history:
+            role = "User" if turn["role"] == "user" else "Assistant"
+            history_text += f"{role}: {turn['content']}\n"
+
+        user_prompt = QUERY_REWRITE_USER_TEMPLATE.format(
+            history=history_text.strip(), question=question
+        )
+
+        try:
+            rewritten_query = self.llm_provider.generate_with_system(
+                QUERY_REWRITE_SYSTEM_PROMPT, user_prompt
+            )
+            # Remove any surrounding quotes
+            rewritten_query = rewritten_query.strip().strip("\"'")
+            return rewritten_query
+        except Exception as e:
+            print(f"⚠️  Error rewriting query, using original: {e}")
+            return question
+
+    def query(self, question: str, top_k: int = None, history: List[Dict] = None) -> Dict:
         """
         Query the system and generate an answer using RAG
 
         Args:
             question: User's question
             top_k: Number of chunks to retrieve
+            history: Optional list of previous conversation turns
 
         Returns:
             Dict with answer and source information
         """
-        # Retrieve relevant chunks
-        results = self.retrieve(question, top_k=top_k or 10)  # Retrieve more chunks
+        history = history or []
+
+        # Rewrite the query if we have history
+        search_query = self._rewrite_query(question, history)
+        
+        # Retrieve relevant chunks using the rewritten query
+        results = self.retrieve(search_query, top_k=top_k or 10)  # Retrieve more chunks
 
         if not results:
             return {
                 "answer": "I couldn't find any relevant information in the call transcripts. Try:\n- Listing calls with 'list calls'\n- Asking about specific topics like pricing, objections, or security\n- Summarizing a specific call",
                 "sources": [],
-                "query": question,
+                "query": search_query,
             }
 
         # Build context from retrieved chunks - use top 5 most relevant
@@ -143,29 +191,25 @@ class RetrievalService:
 
         context = "\n".join(context_parts)
 
-        # Create prompt for LLM
-        system_prompt = """You are a helpful assistant analyzing sales call transcripts. 
-Your job is to answer questions based on the provided context from call transcripts.
+        # Format history block for the QA prompt
+        history_block = ""
+        if history:
+            history_block = "Conversation History:\n"
+            for turn in history:
+                role = "User" if turn["role"] == "user" else "Assistant"
+                history_block += f"{role}: {turn['content']}\n"
+            history_block += "\n"
 
-Guidelines:
-1. Answer based on the provided context - even if the information is partial or indirect
-2. If you find relevant information, provide it - don't say "I couldn't find" unless truly empty
-3. Always cite which call(s) and timestamp(s) your answer comes from
-4. Be helpful and extract whatever relevant information exists
-5. If multiple sources provide information, synthesize them clearly
-6. Highlight key insights like objections, pricing discussions, next steps, or concerns
-7. If the question is general (like "hey" or "what's up"), provide a helpful overview of what you can do"""
-
-        user_prompt = f"""Context from call transcripts:
-{context}
-
-Question: {question}
-
-Please provide a clear answer based on the context above. Reference which call(s) and timestamp(s) support your answer."""
+        # Build prompts from centralised templates
+        user_prompt = QA_USER_PROMPT_TEMPLATE.format(
+            context=context, history=history_block, question=question
+        )
 
         # Generate answer
         try:
-            answer = self.llm_provider.generate_with_system(system_prompt, user_prompt)
+            answer = self.llm_provider.generate_with_system(
+                QA_SYSTEM_PROMPT, user_prompt
+            )
         except Exception as e:
             answer = f"Error generating answer: {str(e)}\n\nHere are the relevant sources I found:\n"
             for i, result in enumerate(top_results, 1):
@@ -185,7 +229,8 @@ Please provide a clear answer based on the context above. Reference which call(s
         return {
             "answer": answer,
             "sources": sources,
-            "query": question,
+            "query": search_query,  # Return the search query
+            "original_question": question,
             "num_sources": len(sources),
         }
 
@@ -202,8 +247,6 @@ Please provide a clear answer based on the context above. Reference which call(s
         # Get transcript from database with session management
         session = self.db_manager.get_session()
         try:
-            from src.storage.database import CallTranscript, CallChunk
-
             transcript = (
                 session.query(CallTranscript).filter_by(call_id=call_id).first()
             )
@@ -233,26 +276,15 @@ Please provide a clear answer based on the context above. Reference which call(s
         if len(full_text) > 3000:
             full_text = full_text[:3000] + "\n\n[... transcript continues ...]"
 
-        # Create summary prompt
-        system_prompt = """You are a sales call analyst. Create a concise summary of the call transcript.
-
-Your summary should include:
-1. Call type and main purpose
-2. Key participants
-3. Main topics discussed
-4. Important objections or concerns raised
-5. Pricing discussions (if any)
-6. Action items and next steps
-7. Overall sentiment and deal status"""
-
-        user_prompt = f"""Call Transcript for '{call_id}':
-
-{full_text}
-
-Please provide a structured summary of this call."""
+        # Build prompts from centralised templates
+        user_prompt = SUMMARIZATION_USER_PROMPT_TEMPLATE.format(
+            call_id=call_id, full_text=full_text
+        )
 
         # Generate summary
-        summary = self.llm_provider.generate_with_system(system_prompt, user_prompt)
+        summary = self.llm_provider.generate_with_system(
+            SUMMARIZATION_SYSTEM_PROMPT, user_prompt
+        )
 
         return {
             "call_id": call_id,

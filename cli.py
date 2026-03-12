@@ -19,6 +19,7 @@ from src.config import (
     CHUNK_SIZE,
     CHUNK_OVERLAP,
     TRANSCRIPTS_DIR,
+    MAX_HISTORY_TURNS,
 )
 from src.storage.database import DatabaseManager
 from src.storage.embeddings import get_embedding_provider
@@ -47,6 +48,7 @@ class SalesChatbot:
         self.llm_provider = None
         self.ingestion_service = None
         self.retrieval_service = None
+        self._history = []
 
     def initialize(self):
         """Initialize all components"""
@@ -139,6 +141,7 @@ class SalesChatbot:
    - What next steps were agreed upon?
    
 🔧 UTILITY:
+   reset                        - Clear conversation history
    help                         - Show this help message
    clear                        - Clear the screen
    exit / quit                  - Exit the chatbot
@@ -260,13 +263,25 @@ class SalesChatbot:
         """Handle natural language queries"""
         print("\n⏳ Searching and generating answer...\n")
 
-        result = self.retrieval_service.query(query)
+        result = self.retrieval_service.query(query, history=self._history)
+
+        # Show if query was rewritten
+        if result.get("query") and result["query"] != result.get("original_question"):
+            self.print_colored(f"🔄 (Searched for: '{result['query']}')", Fore.BLACK + Style.BRIGHT)
 
         # Print answer
         self.print_colored("\n💡 ANSWER:", Fore.GREEN)
         self.print_colored("=" * 70, Fore.GREEN)
         print(result["answer"])
         print()
+
+        # Update history
+        self._history.append({"role": "user", "content": query})
+        self._history.append({"role": "assistant", "content": result["answer"]})
+
+        # Cap history to MAX_HISTORY_TURNS (each turn is 2 messages)
+        if len(self._history) > MAX_HISTORY_TURNS * 2:
+            self._history = self._history[-(MAX_HISTORY_TURNS * 2):]
 
         # Print sources
         if result["sources"]:
@@ -299,6 +314,10 @@ class SalesChatbot:
 
         elif lower_input == "clear":
             os.system("clear" if os.name == "posix" else "cls")
+
+        elif lower_input == "reset":
+            self._history.clear()
+            self.print_colored("\n🧹 Conversation history cleared.\n", Fore.GREEN)
 
         elif lower_input in ["list calls", "list my call ids", "list"]:
             self.handle_list_calls()

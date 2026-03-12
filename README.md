@@ -7,6 +7,7 @@ A conversational AI chatbot that helps sales users understand and summarize thei
 This chatbot:
 - Ingests sales call transcripts and stores them in a vector database (FAISS)
 - Allows natural language queries about call content
+- **Conversation memory**: Remembers context for follow-up questions
 - Provides answers with **source attribution** (call ID + timestamps)
 - Supports summarization of individual calls
 - Configurable LLM providers (Ollama, Gemini)
@@ -28,7 +29,16 @@ sales-chatbot/
 │   ├── retrieval/
 │   │   └── service.py         # RAG implementation
 │   └── llm/
-│       └── providers.py       # LLM providers (Ollama/Gemini)
+│       ├── providers.py       # LLM providers (Ollama/Gemini)
+│       └── prompts.py         # Centralised prompt templates
+├── tests/                     # pytest test suite (131 tests)
+│   ├── conftest.py            # Shared fixtures
+│   ├── test_parser.py
+│   ├── test_database.py
+│   ├── test_vector_store.py
+│   ├── test_ingestion_service.py
+│   ├── test_retrieval_service.py
+│   └── test_providers.py
 ├── data/
 │   ├── transcripts/           # Raw call transcripts
 │   └── db/                    # SQLite + FAISS index
@@ -87,6 +97,9 @@ EMBEDDING_PROVIDER=sentence-transformers
 # Ollama settings (if using Ollama)
 OLLAMA_MODEL=llama3.2
 OLLAMA_BASE_URL=http://localhost:11434
+
+# Features
+MAX_HISTORY_TURNS=5
 ```
 
 ### For Ollama Users
@@ -157,6 +170,7 @@ Just type naturally! Examples:
 
 #### 🔧 Utility
 ```
+> reset      # Clear conversation history
 > help       # Show help
 > clear      # Clear screen
 > exit       # Quit
@@ -195,6 +209,20 @@ Based on the call transcripts, several key objections were raised:
    Time: [02:54] - [03:20]
    Relevance: 0.892
    Snippet: SE: Let's pop open the Copilot chat...
+
+You > Which integrations specifically?
+
+🔄 (Searched for: 'Which specific integrations were mentioned causing concerns?')
+💡 ANSWER:
+======================================================================
+The main integration discussed was Okta SSO. Priya (RevOps) brought this up 
+because their IT mandate requires Okta for all new vendor deployments...
+
+📚 SOURCES (1):
+1. Call: demo_call
+   Time: [02:54] - [03:20]
+   Relevance: 0.910
+   Snippet: Priya: Does this support Okta SSO? IT won't approve without it.
 
 You > summarize demo_call
 
@@ -250,25 +278,26 @@ Key Discussion Points:
 
 ## 🧪 Testing
 
-Basic smoke test:
+The project has a comprehensive pytest test suite covering all core modules:
 
 ```bash
-# Test ingestion
-python -c "
-from src.ingestion.parser import TranscriptParser
-parser = TranscriptParser()
-call_id, chunks = parser.parse_file('data/transcripts/1_demo_call.txt')
-print(f'Parsed {call_id} into {len(chunks)} chunks')
-"
+# Run all tests
+pytest tests/ -q
 
-# Test embedding
-python -c "
-from src.storage.embeddings import get_embedding_provider
-provider = get_embedding_provider('sentence-transformers')
-emb = provider.embed_text('test')
-print(f'Embedding dimension: {len(emb)}')
-"
+# Run with coverage report
+pytest tests/ --cov=src --cov-report=term-missing
+
+# Run a specific module
+pytest tests/test_parser.py -v
 ```
+
+**131 tests · 87% coverage** across:
+- `tests/test_parser.py` — TranscriptParser, chunking edge cases, metadata extraction
+- `tests/test_database.py` — All DatabaseManager methods, DetachedInstanceError regression
+- `tests/test_vector_store.py` — FAISS add/search/save/load, error cases
+- `tests/test_ingestion_service.py` — End-to-end ingestion, duplicate handling, directory scanning
+- `tests/test_retrieval_service.py` — RAG query, summarization, LLM error fallback
+- `tests/test_providers.py` — Factory functions, provider unit tests (no real API calls)
 
 ## 🔄 Extending the System
 
@@ -277,7 +306,8 @@ print(f'Embedding dimension: {len(emb)}')
 1. Create provider class in `src/llm/providers.py`
 2. Implement `LLMProvider` interface
 3. Add to `get_llm_provider()` factory
-4. Update `.env.example`
+4. Add any new system prompts to `src/llm/prompts.py`
+5. Update `.env.example`
 
 ### Add New Embedding Provider
 
@@ -288,7 +318,6 @@ print(f'Embedding dimension: {len(emb)}')
 ### Add New Features
 
 Ideas for live coding extension:
-- Multi-turn conversation memory
 - Export summaries to PDF/DOCX
 - Advanced filters (by participant, date range)
 - Sentiment analysis on chunks
