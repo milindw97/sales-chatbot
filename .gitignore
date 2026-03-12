@@ -1,0 +1,74 @@
+# Vector DB
+data/db/
+
+# Implementation docs
+ARCHITECTURE.md
+DELIVERABLES.md
+PROJECT_STRUCTURE.md
+PROJECT_SUMMARY.md
+QUICKSTART.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.ruff_cache/
+.coverage
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Environment variables
+.env
+
+# Database files
+*.db
+*.db-journal
+
+# FAISS index files
+data/db/*.index
+data/db/*.meta
+
+# Model cache
+.cache/
+models/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Pytest
+.pytest_cache/
