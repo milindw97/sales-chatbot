@@ -366,8 +366,8 @@ Vector dimension doesn't match index
 
 ## 👤 Author
 
-Built for I2 Coding Round - Conversational AI Copilot Assignment
+**Milind Wadhwa**
 
 ## 📄 License
 
-For assignment evaluation purposes only.
+This project is licensed under the MIT License - see the LICENSE file for details.
