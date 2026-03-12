@@ -317,7 +317,6 @@ pytest tests/test_parser.py -v
 
 ### Add New Features
 
-Ideas for live coding extension:
 - Export summaries to PDF/DOCX
 - Advanced filters (by participant, date range)
 - Sentiment analysis on chunks
